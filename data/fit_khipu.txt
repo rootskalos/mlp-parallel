@@ -1,0 +1,5 @@
+Modelo: Tp = a*(PS/p)*n + b*log2(p)   (nnls, a,b>=0, sin intercepto)
+a = 2.4179e-04 s/muestra   (factor de proporcionalidad de O(E*n*d*h))
+b = 2.1775 s            (overhead de sincronizacion por ronda, crece con log2 p)
+R^2 = 0.9887
+(PS=32)

@@ -1,0 +1,25 @@
+# Python
+.venv/
+venv/
+env/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# LaTeX auxiliares (se regeneran al compilar)
+*.aux
+*.toc
+*.out
+*.fls
+*.fdb_latexmk
+*.synctex.gz
+*.bbl
+*.blg
+informe/*.log
+estudio/*.log
+
+# macOS / editor
+.DS_Store
+.idea/
+.vscode/

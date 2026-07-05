@@ -1,0 +1,1123 @@
+% ====================================================================
+%  GUIA DE ESTUDIO COMPLETA -- Proyecto #7 (MLP paralelo)
+%  Computacion Paralela y Distribuida (CS4052)
+%  Lee este documento de principio a fin. No asume ningun conocimiento previo.
+%  Compila con:  tectonic guia_completa.tex
+% ====================================================================
+\documentclass[11pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[spanish,es-tabla]{babel}
+\usepackage[a4paper,margin=2.3cm]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage{tcolorbox}
+\tcbuselibrary{breakable}
+\hypersetup{colorlinks=true,linkcolor=blue!55!black,urlcolor=blue!55!black}
+\setlength{\parindent}{0pt}\setlength{\parskip}{5pt}
+
+\definecolor{clave}{RGB}{0,90,160}
+\definecolor{fondo}{RGB}{245,248,252}
+\newtcolorbox{caja}[1][]{
+  colback=fondo,colframe=clave!60,boxrule=0.5pt,arc=2pt,
+  left=6pt,right=6pt,top=4pt,bottom=4pt,breakable,#1}
+\newtcolorbox{importante}[1][]{
+  colback=yellow!8,colframe=orange!70!black,boxrule=0.6pt,arc=2pt,
+  left=6pt,right=6pt,top=4pt,bottom=4pt,breakable,#1}
+\newcommand{\term}[1]{\textbf{\textcolor{clave}{#1}}}
+
+\title{\Huge\textbf{Guía de Estudio Completa}\\[6pt]
+\Large Proyecto \#7: Redes Neuronales --- Entrenamiento paralelo de MLP\\[4pt]
+\large Computación Paralela y Distribuida (CS4052) -- 2026-I\\[2pt]
+\small \emph{Todo explicado desde cero, sin asumir conocimientos previos}}
+\author{Kalos Lazo Mera \quad Aaron C. A. Navarro Mendoza \quad Fernando A. Usurin Arias}
+\date{Julio de 2026}
+
+\begin{document}
+\maketitle
+\tableofcontents
+\newpage
+
+% ====================================================================
+\begin{caja}[title=\textbf{Cómo usar esta guía}]
+Este documento explica \textbf{absolutamente todo} lo que necesitas saber para
+entender el proyecto y defender la exposición oral. Está ordenado de lo más
+básico a lo específico. Si lees de principio a fin, entenderás:
+\begin{enumerate}
+  \item Qué es la computación paralela y sus conceptos (Parte I).
+  \item El modelo teórico PRAM que usa el curso (Parte II).
+  \item Qué es una red neuronal / MLP (Parte III).
+  \item El problema concreto del proyecto (Parte IV).
+  \item El algoritmo paralelo que diseñamos (Parte V).
+  \item Cómo se calculan las métricas, con números reales (Parte VI).
+  \item Cómo está hecho el código (Parte VII).
+  \item Qué significan los resultados (Parte VIII).
+  \item Cómo exponer y qué preguntará el profe (Parte IX).
+\end{enumerate}
+Las cajas \textcolor{orange!70!black}{naranjas} marcan lo MÁS IMPORTANTE.
+\end{caja}
+
+% ====================================================================
+\part*{PARTE I --- Fundamentos de computación paralela}
+\addcontentsline{toc}{section}{PARTE I --- Fundamentos de computación paralela}
+
+\section{¿Qué es la computación paralela?}
+
+Un programa \term{secuencial} ejecuta una instrucción tras otra, en un solo
+procesador, una a la vez. Si una tarea tarda 10 horas, así se queda.
+
+La \term{computación paralela} consiste en usar \textbf{varios procesadores a la
+vez} para resolver un problema \textbf{más rápido}. La idea es dividir el trabajo
+en partes independientes y que cada procesador haga una parte al mismo tiempo
+(\emph{en paralelo}).
+
+\textbf{Ejemplo cotidiano.} Si tienes que lavar 100 platos y lo haces solo,
+tardas 100 minutos. Si invitas a 4 amigos y cada uno lava 25 plados, terminan en
+$\approx 25$ minutos. Eso es paralelismo: el trabajo total es el mismo, pero lo
+repartiste.
+
+\begin{importante}[title=\textbf{Idea clave}]
+Paralelizar NO reduce el trabajo total (los 100 plados se lavan igual). Reduce
+el \textbf{tiempo de reloj} (cuánto tardas tú en ver el resultado) porque varias
+unidades de trabajo ocurren \emph{al mismo tiempo}.
+\end{importante}
+
+\section{Procesador, núcleo, hilo, proceso}
+
+\begin{itemize}
+  \item \term{CPU / procesador}: el ``cerebro'' del computador que ejecuta
+        instrucciones.
+  \item \term{Núcleo (core)}: una unidad de cálculo dentro de la CPU. Una CPU
+        moderna tiene \textbf{varios núcleos} (tu MacBook M5 tiene 10; un nodo del
+        cluster Khipu tiene 32). Cada
+        núcleo puede ejecutar una secuencia de instrucciones a la vez.
+  \item \term{Hilo (thread)}: una secuencia de instrucciones en ejecución. Un
+        núcleo puede cambiar rápido entre hilos, pero realmente hace uno a la vez
+        (o dos con \emph{hyper-threading}).
+  \item \term{Proceso}: un programa en ejecución, con su propia memoria. Un
+        proceso puede tener varios hilos dentro.
+\end{itemize}
+
+En este proyecto usamos \textbf{procesos} (no hilos) para paralelizar. Verás por
+qué en la Parte V (el GIL de Python).
+
+\section{Memoria compartida vs memoria distribuida}
+
+Esta es LA distinción más importante del curso. Hay dos formas de organizar una
+máquina paralela:
+
+\subsection{Memoria compartida (shared memory)}
+Todos los procesadores/núcleos ven \textbf{la misma memoria}. Si un procesador
+escribe un dato en la dirección 1000, los demás lo pueden leer de ahí
+inmediatamente. Comunicarse entre procesadores = leer/escribir variables
+compartidas. Rápido y simple.
+
+\textbf{Tecnologías:} \term{OpenMP} (en C/C++/Fortran), \term{multithreading},
+\term{multiprocessing} (Python). Tu CPU multinúcleo es de memoria compartida.
+
+\subsection{Memoria distribuida (distributed memory)}
+Cada procesador tiene \textbf{su propia memoria privada}. Para que el procesador
+B vea un dato del procesador A, A debe \emph{enviarle un mensaje} (copiar los
+datos por la red). Comunicarse = enviar y recibir mensajes.
+
+\textbf{Tecnología:} \term{MPI} (Message Passing Interface). Los clústers de
+muchas computadoras son de memoria distribuida.
+
+\begin{caja}[title=\textbf{Comparación rápida}]
+\begin{tabular}{p{0.32\textwidth}p{0.31\textwidth}p{0.31\textwidth}}
+& \textbf{Compartida} & \textbf{Distribuida} \\\midrule
+Memoria & Una sola, global & Una por procesador \\
+Comunicación & Leer/escribir variables & Enviar mensajes (MPI) \\
+Ejemplo & Tu laptop multinúcleo & Clúster de PCs \\
+Librería típica & OpenMP & MPI \\
+¿Copiar datos? & No, ya están & Sí, hay que enviarlos \\
+\end{tabular}
+\end{caja}
+
+\textbf{En nuestro proyecto usamos memoria compartida.} La justificación está en
+la Parte V (los datos son compartidos y de solo lectura, así que es más
+eficiente no tener que copiarlos).
+
+\section{Tiempo secuencial y tiempo paralelo}
+
+\begin{itemize}
+  \item \term{$T_s$} (tiempo secuencial): cuánto tarda el programa con
+        \textbf{1} solo procesador. Es tu línea base.
+  \item \term{$T_p$} (tiempo paralelo): cuánto tarda con \textbf{$p$}
+        procesadores.
+\end{itemize}
+
+El objetivo siempre es que $T_p < T_s$, y cuanto menor, mejor.
+
+\section{Speedup (aceleración)}
+
+El \term{speedup} mide cuántas veces más rápido es el paralelo:
+
+\[
+S(p)=\frac{T_s}{T_p}
+\]
+
+\textbf{Ejemplo con datos reales de nuestro proyecto} (Khipu, n=40000 muestras):
+\begin{itemize}
+  \item $T_s = T_1 = 305$\,s (con 1 proceso).
+  \item Con $p=8$ procesos: $T_8 = 53$\,s.
+  \item $S(8)=305/53 = 5.7$. O sea, 5.7 veces más rápido.
+\end{itemize}
+
+El \term{speedup ideal} es $S(p)=p$ (el doble de procesadores $\Rightarrow$ el
+doble de rápido). En la práctica casi nunca se alcanza.
+
+\section{Eficiencia}
+
+La \term{eficiencia} es el speedup ``por procesador'':
+
+\[
+E(p)=\frac{S(p)}{p}=\frac{T_s}{p\cdot T_p}
+\]
+
+Mide qué \emph{tan bien} estás aprovechando los procesadores:
+\begin{itemize}
+  \item $E=1$ (100\,\%): aprovechamiento perfecto.
+  \item $E=0.5$: estás usando la mitad del potencial.
+\end{itemize}
+
+\textbf{Ejemplo real:} con $p=4$, $S(4)=3.5$, entonces $E(4)=3.5/4=0.87$. Estás
+aprovechando el 87\,\% de los 4 procesadores. ¡Bastante bueno!
+
+\section{La ley de Amdahl}
+
+\begin{importante}[title=\textbf{Ley de Amdahl --- la idea central}]
+Ningún programa es 100\,\% paralelizable. Siempre hay una \textbf{fracción
+secuencial} $f$ que no se puede paralelizar (leer datos, inicializar, reducir el
+resultado final\ldots). Esa fracción fija un \textbf{techo} al speedup por muchos
+procesadores que agregues.
+\end{importante}
+
+Si una fracción $f$ del programa es secuencial y el resto $(1-f)$ es paralela,
+entonces:
+
+\[
+S(p) \le \frac{1}{f+\dfrac{1-f}{p}}
+\]
+
+Cuando $p\to\infty$ (procesadores infinitos), $S\to 1/f$. \textbf{El speedup
+máximo es $1/f$, por muchos núcleos que tengas.}
+
+\textbf{Ejemplo:} si $f=0.1$ (10\,\% secuencial), el speedup máximo es
+$1/0.1=10$, aunque tengas 1000 núcleos. Esa fracción secuencial te condena.
+
+En nuestro proyecto, $S$ satura en \textbf{$\approx 5$ en la Mac (10 núcleos) y
+$\approx 10.6$ en Khipu (32 núcleos)}. Para la Mac, eso implica una fracción
+efectiva $f\approx 1/5 = 0.2$. ¿De dónde viene ese 20\,\% ``secuencial''? No es
+código secuencial puro, sino que \textbf{los procesos se estorban} (contención de
+memoria) y el hyper-threading infla el conteo de núcleos. Lo veremos en la
+Parte VIII.
+
+\section{La ley de Gustafson (weak scaling)}
+
+Amdahl asume que el \textbf{tamaño del problema es fijo}. Gustafson dice: ¿y si
+cuando agregas procesadores también \textbf{agrandas el problema}? (cada
+procesador hace el mismo trabajo pero en total se resuelve algo más grande).
+
+Bajo este ``weak scaling'', el speedup puede crecer \emph{casi lineal} con $p$,
+porque la fracción secuencial deja de dominar.
+
+\begin{caja}[title=\textbf{Resumen Amdahl vs Gustafson}]
+\begin{tabular}{lll}
+& \textbf{Amdahl} & \textbf{Gustafson} \\\midrule
+Tamaño del problema & Fijo & Crece con $p$ \\
+Tipo de escalabilidad & Strong scaling & Weak scaling \\
+Speedup & Techo limitado por $f$ & Casi lineal \\
+Eficiencia $E$ & Cae con $p$ & Se mantiene $\approx 1$ \\
+\end{tabular}
+\end{caja}
+
+\section{Strong scaling vs weak scaling}
+
+\begin{itemize}
+  \item \term{Strong scaling}: mantienes el problema \textbf{fijo} (mismos datos)
+        y aumentas $p$. Pregunta: ``¿termina más rápido?'' Mide $T_p$ vs $p$.
+        Ideal: $T_p = T_s/p$.
+  \item \term{Weak scaling}: aumentas el problema \textbf{junto con} $p$ (cada
+        procesador siempre hace el mismo trabajo). Pregunta: ``¿sigue tardando lo
+        mismo?'' Mide $T_p(n\cdot p)/T_p(n)$; ideal $=1$.
+\end{itemize}
+
+\section{FLOPs y GFLOP/s}
+
+\begin{itemize}
+  \item \term{FLOP} = \emph{Floating-point OPeration}: una operación de coma
+        flotante (una suma o multiplicación con decimales).
+  \item \term{FLOPs} (con minúscula): cantidad total de operaciones.
+  \item \term{FLOP/s} o \term{GFLOP/s}: operaciones por segundo (giga =
+        $10^9$). Mide el \textbf{rendimiento}: cuán rápido calcula la máquina.
+\end{itemize}
+
+\textbf{Fórmula:} $\text{GFLOP/s} = \dfrac{\text{FLOPs totales}}{T_p \cdot 10^9}$.
+
+A más GFLOP/s, más rápido calcula. En nuestro proyecto, el rendimiento pico es
+$\approx 53$\,GFLOP/s.
+
+\begin{importante}[title=\textbf{Las 3 métricas que pide el enunciado}]
+\begin{enumerate}
+  \item \textbf{Tiempo de ejecución} $T_p$ (segundos).
+  \item \textbf{Speedup} $S(p)=T_s/T_p$.
+  \item \textbf{Eficiencia} $E(p)=S(p)/p$.
+\end{enumerate}
+Y de regalo: GFLOP/s (rendimiento).
+\end{importante}
+
+% ====================================================================
+\part*{PARTE II --- El modelo PRAM}
+\addcontentsline{toc}{section}{PARTE II --- El modelo PRAM}
+
+\section{¿Qué es PRAM?}
+
+\term{PRAM} = \emph{Parallel Random Access Machine}. Es un \textbf{modelo
+teórico} (como una receta abstracta) para describir algoritmos paralelos. No es
+una máquina real; es una forma de \textbf{escribir y analizar} algoritmos
+paralelos de manera limpia.
+
+Imagina una máquina con:
+\begin{itemize}
+  \item Un número $p$ de \textbf{procesadores} idénticos: $P_0, P_1, \ldots,
+        P_{p-1}$.
+  \item Una \textbf{memoria global compartida} con celdas.
+  \item Un \textbf{reloj común}: en cada ``paso'' de reloj, todos los
+        procesadores ejecutan una instrucción a la vez.
+\end{itemize}
+
+El PRAM es la forma estándar del curso de \textbf{describir un algoritmo
+paralelo en pseudocódigo} y calcular su complejidad.
+
+\section{Los 4 sabores de PRAM (EREW, CREW, ERCW, CRCW)}
+
+El problema clave de la memoria compartida: \textbf{¿qué pasa si dos
+procesadores quieren acceder a la MISMA celda de memoria al mismo tiempo?}
+
+Depende de si es lectura o escritura:
+\begin{itemize}
+  \item \textbf{Lectura concurrente}: ¿pueden varios leer la misma celda a la vez?
+  \item \textbf{Escritura concurrente}: ¿pueden varios escribir en la misma celda a la vez?
+\end{itemize}
+
+De ahí salen 4 modelos (E=Exclusive, C=Concurrent):
+
+\begin{caja}[title=\textbf{Los 4 modelos PRAM}]
+\begin{tabular}{lll}
+Modelo & Lectura & Escritura \\\midrule
+\textbf{EREW} & Exclusiva & Exclusiva \\
+\textbf{CREW} & Concurrente & Exclusiva \\
+\textbf{ERCW} & Exclusiva & Concurrente \\
+\textbf{CRCW} & Concurrente & Concurrente \\
+\end{tabular}
+\end{caja}
+
+\begin{itemize}
+  \item \textbf{EREW} (el más estricto): ni leer ni escribir pueden coincidir. El
+        más ``caro'' de simular pero el más realista en hardware básico.
+  \item \textbf{CREW}: varios pueden LEER a la vez, pero si alguien ESCRIBE, debe
+        ser el único. \textbf{Es el modelo que usamos en el proyecto.}
+  \item \textbf{CRCW} (el más permisivo): hasta pueden escribir varios a la vez
+        (hay que definir cómo se resuelve el conflicto). El más poderoso pero el
+        menos realista.
+\end{itemize}
+
+\textbf{¿Por qué elegimos CREW en el proyecto?} Porque:
+\begin{itemize}
+  \item Los $p$ procesadores \textbf{leen el dataset concurrentemente} (lectura
+        concurrente $\Rightarrow$ la C de CREW).
+  \item Las escrituras del resultado son \textbf{exclusivas}: cada procesador
+        escribe en su propia celda, sin pisarse (escritura exclusiva $\Rightarrow$
+        la EW de CREW).
+  \item No necesitamos escritura concurrente (CRCW sería matar moscas a cañonazos).
+\end{itemize}
+
+\section{El paradigma Work--Time (WT)}
+
+El curso usa una forma específica de escribir algoritmos PRAM llamada
+\term{Work--Time (WT)}. En vez de contar ciclos de reloj uno por uno, se escribe
+el pseudocódigo marcando qué partes van en paralelo, y luego se derivan dos
+cantidades:
+
+\begin{itemize}
+  \item \term{Work $W$}: el trabajo total = número de operaciones = equivale al
+        tiempo secuencial $T_s$.
+  \item \term{Span $T_\infty$}: el camino crítico = el tiempo con procesadores
+        \emph{infinitos}.
+\end{itemize}
+
+\section{La palabra clave \texttt{pardo}}
+
+En el pseudocódigo WT, la palabra \term{\texttt{pardo}} (\emph{parallel-do})
+marca los bucles que se ejecutan \textbf{en paralelo}. Todo lo que está dentro de
+un \texttt{pardo} lo hacen todos los procesadores a la vez.
+
+\begin{verbatim}
+for k = 0 to p-1 pardo do
+    <lo que hace cada procesador, en paralelo>
+\end{verbatim}
+
+\begin{importante}[title=\textbf{Corrección clave del parcial}]
+En el informe parcial llamamos \textbf{``Broadcast''} al paso donde los
+procesadores leen los datos. \textbf{Eso estaba mal}: en memoria compartida NO
+existe un ``broadcast''. Los datos ya están en memoria global; cada procesador
+simplemente los \textbf{lee concurrentemente} (eso es justamente el acceso CREW).
+Por eso en la versión final lo renombramos a \textbf{``lectura concurrente''} y
+lo marcamos con \texttt{pardo} donde corresponde. \textbf{No digas nunca
+``broadcast'' en memoria compartida} o el profe te para.
+\end{importante}
+
+\section{Work $W$ y Span $T_\infty$ con detalle}
+
+\subsection{Work $W$}
+Es el \textbf{total de operaciones} que hace el algoritmo, contando las de todos
+los procesadores. Si lo corriera un solo procesador secuencialmente, tardaría
+$O(W)$. Por eso \textbf{$W$ equivale al tiempo secuencial $T_s$}.
+
+\subsection{Span $T_\infty$}
+Es la duración del \textbf{camino crítico}: la cadena más larga de operaciones
+que dependen una de otra. Representa el tiempo que tardarías si tuvieras
+\textbf{procesadores infinitos} (por eso el subíndice $\infty$). Con procesadores
+infinitos, lo único que limita es qué operaciones DEBEN ir en secuencia.
+
+\textbf{Intuición:} imagina una receta. Aunque tuvieras 1000 cocineros, no
+puedes servir el plato antes de hornearlo. El span es el tiempo mínimo
+irreducible (lo que forzosamente va en secuencia).
+
+\section{El Teorema de Brent}
+
+El Teorema de Brent relaciona $W$, $T_\infty$ y el número real de procesadores
+$p$ con el tiempo paralelo $T_p$:
+
+\[
+\boxed{T_p \;\le\; \frac{W}{p} + T_\infty}
+\]
+
+\textbf{Interpretación:}
+\begin{itemize}
+  \item $\dfrac{W}{p}$: si repartieras el trabajo $W$ perfectamente entre $p$
+        procesadores.
+  \item $T_\infty$: el ``mínimo irreducible'' (camino crítico).
+  \item El tiempo real está por debajo de la suma.
+\end{itemize}
+
+Esto da una cota \textbf{superior} del tiempo paralelo: en el peor caso, $T_p$
+no supera $W/p + T_\infty$.
+
+\section{Costo $C_p$ y WT-optimalidad}
+
+\term{Costo} $C_p = T_p \cdot p$ (tiempo $\times$ número de procesadores). Es una
+medida del ``esfuerzo total'' gastado.
+
+Un algoritmo PRAM es \term{WT-óptimo} si su costo es proporcional al trabajo:
+\[
+C_p = O(W) \quad\Longleftrightarrow\quad T_p = O(W/p)
+\]
+Es decir, cuando el paralelo reparte \emph{perfectamente} el trabajo (no desperdicia
+procesadores). Esto se cumple si $p \le W/T_\infty$.
+
+\begin{caja}[title=\textbf{En nuestro proyecto}]
+$W/T_\infty = O(p_s)$ (número de semillas). Como siempre usamos $p \le p_s=32$,
+el algoritmo \textbf{es WT-óptimo}. Bien.
+\end{caja}
+
+% ====================================================================
+\part*{PARTE III --- Redes neuronales (MLP) desde cero}
+\addcontentsline{toc}{section}{PARTE III --- Redes neuronales (MLP) desde cero}
+
+\section{¿Qué es una red neuronal?}
+
+Una \term{red neuronal artificial} es un modelo matemático inspirado (muy
+vagamente) en las neuronas del cerebro. Sirve para \textbf{aprender patrones a
+partir de datos}: le muestras muchos ejemplos y ``aprende'' a hacer una tarea
+(clasificar imágenes, predecir un número, etc.).
+
+No es magia ni inteligencia: es un montón de \textbf{multiplicaciones y sumas}
+organizadas de forma ingeniosa, que se ajustan automáticamente para minimizar
+errores.
+
+\section{La neurona artificial}
+
+Una \term{neurona} (o ``perceptrón'') es una función matemática simple:
+\[
+y = f(w_1 x_1 + w_2 x_2 + \ldots + w_d x_d + b)
+\]
+\begin{itemize}
+  \item $x_1,\ldots,x_d$: las \textbf{entradas} (los datos, ej. los píxeles de
+        una imagen o las ``features'').
+  \item $w_1,\ldots,w_d$: los \textbf{pesos} (números que la red aprende).
+  \item $b$: el \textbf{sesgo} (bias), otro número que se aprende.
+  \item $f$: la \textbf{función de activación} (veremos cuál).
+  \item $y$: la \textbf{salida}.
+\end{itemize}
+
+La neurona calcula una \textbf{suma ponderada} de las entradas (cada entrada por
+su peso) más el sesgo, y le aplica una función.
+
+\section{MLP: la estructura}
+
+\term{MLP} = \emph{Multi-Layer Perceptron} = perceptrón multicapa. Son varias
+neuronas organizadas en \textbf{capas}:
+
+\begin{verbatim}
+[ entrada ]  ->  [ capa oculta ]  ->  [ salida ]
+  d neuronas     h neuronas          c neuronas
+\end{verbatim}
+
+\begin{itemize}
+  \item \textbf{Capa de entrada}: recibe los datos. Tiene $d$ valores (en nuestro
+        proyecto $d=32$ ``features'').
+  \item \textbf{Capa oculta}: las neuronas ``intermedias'' que hacen el trabajo
+        pesado. Tiene $h$ neuronas (en nuestro proyecto $h=128$).
+  \item \textbf{Capa de salida}: produce el resultado. Tiene $c$ neuronas (en
+        nuestro proyecto $c=10$ clases).
+\end{itemize}
+
+Cada neurona de una capa está \textbf{conectada} a todas las de la siguiente, y
+cada conexión tiene un peso. De ahí sale el costo computacional (multiplicar
+matrices).
+
+\section{Forward propagation (propagación hacia adelante)}
+
+Es el cálculo de la salida a partir de la entrada. Paso a paso:
+
+\textbf{De la entrada a la capa oculta:} cada neurona oculta $j$ calcula:
+\[
+z_j = \sum_{i=1}^{d} w_{ji}^{(1)}\, x_i + b_j^{(1)}, \qquad a_j = f(z_j)
+\]
+Son $h$ neuronas, cada una hace $d$ multiplicaciones. Total: $h\cdot d$
+multiplicaciones. Con activación.
+
+\textbf{De la capa oculta a la salida:} cada neurona de salida $k$ calcula:
+\[
+o_k = \sum_{j=1}^{h} w_{kj}^{(2)}\, a_j + b_k^{(2)}
+\]
+Son $c$ neuronas, cada una hace $h$ multiplicaciones. Total: $c\cdot h$.
+
+\textbf{Total de operaciones por una muestra:} $\approx 2\cdot h\cdot d + 2\cdot
+c\cdot h$ (contando multiplicaciones y sumas como FLOPs).
+
+\section{Función de activación}
+
+La función $f$ introduce \textbf{no linealidad} (sin ella, una red de varias
+capas sería equivalente a una sola, y no podría aprender cosas complejas). Las
+típicas:
+\begin{itemize}
+  \item \term{ReLU}: $f(z)=\max(0,z)$. Simple y muy usada.
+  \item \term{Sigmoide}: aplasta a $[0,1]$.
+  \item \term{Softmax} (en la salida de clasificación): convierte las salidas en
+        probabilidades (suman 1).
+\end{itemize}
+
+\section{Función de pérdida (loss)}
+
+Después del forward, la red produce una predicción. La comparamos con la
+respuesta correcta y medimos el \textbf{error} con una función de pérdida. Para
+clasificación se usa típicamente la \term{entropía cruzada} (\emph{cross-entropy}):
+\[
+\text{Loss} = -\sum_k y_k \log(\hat{y}_k)
+\]
+donde $y$ es la respuesta correcta y $\hat{y}$ la predicción. Menor pérdida =
+mejor predicción.
+
+\section{Backpropagation (retropropagación)}
+
+Aquí está la magia del aprendizaje. La red quiere \textbf{reducir la pérdida}.
+Para eso necesita saber \textbf{cómo cambiar cada peso} para que el error baje.
+
+\term{Backpropagation} calcula, usando la regla de la cadena del cálculo, el
+\textbf{gradiente} de la pérdida respecto a cada peso: $\partial \text{Loss}/
+\partial w$. Es decir, ``cuánto contribuye cada peso al error''.
+
+\textbf{Costo:} el backward cuesta más o menos lo mismo que el forward (hay que
+recorrer la red al revés). Por eso decimos que entrenar cuesta $\approx 2\times$
+un forward.
+
+\section{Descenso de gradiente}
+
+Una vez que sabes el gradiente, \textbf{ajustas los pesos} en dirección contraria
+al error:
+\[
+w_{\text{nuevo}} = w_{\text{viejo}} - \eta \cdot \frac{\partial \text{Loss}}{\partial w}
+\]
+\begin{itemize}
+  \item $\eta$ (\term{learning rate}, tasa de aprendizaje): qué tan grande es el
+        paso. Si es muy grande, diverge; muy pequeño, aprende lento.
+\end{itemize}
+Repetido muchas veces, los pesos convergen a valores que minimizan el error.
+
+\section{Épocas, learning rate, batch}
+
+\begin{itemize}
+  \item \term{Época (epoch)}: una pasada completa por \emph{todos} los datos de
+        entrenamiento. En nuestro proyecto $E=100$ épocas.
+  \item \term{Batch}: en la práctica se procesan los datos en grupos (lotes) en
+        vez de uno por uno. Nosotros usamos todo el conjunto.
+  \item \term{Iteraciones}: el número de actualizaciones. Una época con $n$
+        muestras y batch $b$ tiene $n/b$ iteraciones.
+\end{itemize}
+
+\section{Accuracy (exactitud)}
+
+Métrica de calidad: fracción de predicciones correctas. Si de 100 ejemplos
+acierta 80, $accuracy=0.80$. En nuestro proyecto los mejores modelos alcanzan
+$\approx 0.77$--$0.87$ según el tamaño de los datos.
+
+\section{Los hiperparámetros del proyecto}
+
+Un \term{hiperparámetro} es una configuración que tú eliges (no la aprende la
+red). Los del proyecto:
+\begin{itemize}
+  \item $h=128$: neuronas de la capa oculta.
+  \item $E=100$ (\texttt{max\_iter}): épocas máximas.
+  \item $\alpha=10^{-4}$: regularización L2 (evita sobreajuste).
+  \item $\eta=10^{-3}$ (\texttt{learning\_rate\_init}): learning rate.
+  \item $d=32$: features de entrada; $c=10$: clases.
+\end{itemize}
+
+\section{Las semillas y por qué entrenar varios MLP}
+
+\begin{importante}[title=\textbf{La pregunta clave del proyecto}]
+El entrenamiento de una red empieza con pesos \textbf{aleatorios}, generados por
+un \term{generador de números pseudoaleatorios} (RNG) que se controla con una
+\textbf{semilla} (\emph{seed}). \textbf{Cambiar la semilla cambia el resultado}:
+distintos pesos iniciales $\Rightarrow$ distinto modelo $\Rightarrow$ distinta
+exactitud.
+
+Como no sabemos de antemano qué semilla da el mejor modelo, una práctica robusta
+es \textbf{entrenar varios MLP con semillas distintas y conservar el de mayor
+exactitud}. \textbf{¡Eso es justo lo que paralelizamos!}
+\end{importante}
+
+Entrenamos $p_s=32$ MLP, cada uno con una semilla $s\in\{0,1,\ldots,31\}$, y nos
+quedamos con el de mejor accuracy. Y como cada MLP es \textbf{independiente} de
+los demás, los podemos entrenar \textbf{en paralelo}.
+
+% ====================================================================
+\part*{PARTE IV --- El proyecto}
+\addcontentsline{toc}{section}{PARTE IV --- El proyecto}
+
+\section{El enunciado (proyecto \#7)}
+
+El proyecto pide: dado el pseudocódigo secuencial del Algoritmo 1 (entrenar
+varios MLP con distintas semillas y quedarse con el mejor), \textbf{paralelizarlo}.
+
+Requisitos del enunciado:
+\begin{enumerate}
+  \item Hacer un \textbf{PRAM} y el código en paralelo.
+  \item Usar $p\in\{1,2,4,8,16,32\}$ procesos y $n\in\{5000,10000,20000,40000\}$
+        muestras; generar gráficas de tiempos.
+  \item Registrar el desarrollo en \textbf{al menos 3 versiones beta}.
+  \item Comparar los resultados con la \textbf{complejidad teórica}, superponiendo
+        la curva teórica a la experimental.
+  \item Calcular \textbf{speedup y eficiencia}, analizar la escalabilidad y
+        responder: ¿se mantiene $E$ constante?
+\end{enumerate}
+
+\section{El algoritmo secuencial (Algoritmo 1)}
+
+\begin{caja}[title=\textbf{Algoritmo 1 --- secuencial}]
+\begin{verbatim}
+Dividir (X, y) en train y test  (una sola vez)
+mejor_accuracy = -inf
+para cada semilla s en {0,...,31}:
+    crear modelo M con semilla s
+    entrenar M con (X_train, y_train)     <- esto es lo pesado
+    A = accuracy(M, X_test, y_test)
+    si A > mejor_accuracy:
+        mejor_accuracy = A
+        mejor_modelo = M
+devolver mejor_modelo
+\end{verbatim}
+\end{caja}
+
+El bucle entrena 32 modelos \textbf{uno detrás de otro}. Lento. Ese es nuestro
+$T_s$.
+
+\section{¿Por qué es ``embarassingly parallel''?}
+
+\begin{importante}[title=\textbf{Embarassingly parallel = vergonzosamente paralelo}]
+Es un término técnico (en serio) para problemas que se paralelizan de forma
+\textbf{trivial}: el trabajo se divide en partes \textbf{totalmente
+independientes}, sin necesidad de comunicación entre ellas durante el cómputo.
+
+El entrenamiento de los 32 MLP es así: \textbf{cada MLP no necesita nada de los
+demás}. Solo se juntan al final para comparar accuracies y elegir el mejor
+(una reducción \emph{arg-máx}). Por eso paraleliza genial.
+\end{importante}
+
+% ====================================================================
+\part*{PARTE V --- El algoritmo paralelo}
+\addcontentsline{toc}{section}{PARTE V --- El algoritmo paralelo}
+
+\section{La idea del algoritmo paralelo}
+
+En vez de entrenar los 32 MLP uno por uno, los \textbf{repartimos} entre $p$
+procesadores. Cada procesador entrena $\lceil 32/p \rceil$ MLP y reporta su
+mejor modelo local. Al final, los $p$ ganadores locales se comparan para sacar
+el global (reducción \emph{arg-máx} en árbol).
+
+\section{El modelo PRAM CREW (corregido)}
+
+\begin{caja}[title=\textbf{Algoritmo 2 --- PRAM CREW (memoria compartida)}]
+\begin{verbatim}
+Paso 1 (secuencial, raíz):
+    Dividir (X,y) en train/test
+    Dejar los datos en MEMORIA COMPARTIDA
+
+Paso 2 (PARALELO, pardo):   <- lo que antes llamábamos "Broadcast"
+    para k=0..p-1 pardo:
+        P_k LEE de memoria compartida (X_train, ...)   [lectura CREW]
+        P_k entrena sus semillas S_k y guarda su mejor local
+
+Pasos 3..(2+log2 p) (PARALELO, pardo):  reducción arg-máx en árbol
+    para stride=1..log2(p):
+        para k pardo:
+            si mejor[k+stride] > mejor[k]: mejor[k] = mejor[k+stride]
+
+Devolución: mejor[0] = M*
+\end{verbatim}
+\end{caja}
+
+\section{Las correcciones que hicimos al parcial}
+
+\begin{enumerate}
+  \item \textbf{Quitar ``Broadcast''.} En memoria compartida los datos ya están
+        en memoria global; los procesadores los \textbf{leen concurrentemente}
+        (acceso CREW). No hay nada que ``difundir''.
+  \item \textbf{No paralelizar la lectura como paso aparte.} Es solo lectura de
+        referencias ya compartidas.
+  \item \textbf{No medir la lectura ni el split en los tiempos.} Medimos solo la
+        región paralelizable (entrenamiento) + la reducción.
+  \item \textbf{Justificar el uso de memoria compartida} (sección siguiente).
+  \item \textbf{Incluir el término $\log_2 p$} en la fórmula de $T_p$ (viene de
+        la reducción en árbol).
+\end{enumerate}
+
+\section{Justificación de la memoria compartida (¡pregunta favorita del profe!)}
+
+\begin{importante}[title=\textbf{¿Por qué memoria compartida y no MPI?}]
+\begin{enumerate}
+  \item \textbf{La comunicación es mínima.} Cada MLP es independiente; la única
+        interacción es la reducción final (un árbol de $\log_2 p$ rondas). No se
+        aprovecha nada del paso de mensajes.
+  \item \textbf{Los datos son compartidos y de solo lectura.} Cada MLP se entrena
+        con \emph{todo} el dataset. En memoria compartida, los $p$ procesadores
+        simplemente \textbf{leen} las mismas referencias (sin copiar). En MPI
+        habría que \textbf{copiar el dataset a cada proceso} (memoria $\times p$ +
+        tiempo de envío).
+  \item \textbf{Conclusión:} la memoria compartida es aquí \textbf{más
+        eficiente}. MPI no aportaría nada y sumaría overhead.
+\end{enumerate}
+\end{importante}
+
+\section{OpenMP, multiprocessing y el GIL}
+
+\begin{itemize}
+  \item \term{OpenMP}: la forma estándar de paralelismo en memoria compartida en
+        C/C++/Fortran. Usas directivas (\texttt{\#pragma omp parallel}) para
+        decir ``este bucle va en paralelo''. Modelo \emph{fork-join}.
+  \item \term{GIL} (Global Interpreter Lock): un candado del intérprete de Python
+        que impide que \textbf{dos hilos} ejecuten código Python a la vez. Por
+        eso en Python los \textbf{hilos} no dan paralelismo real.
+  \item \term{multiprocessing}: la solución de Python: en vez de hilos, usa
+        \textbf{procesos} separados (cada uno con su intérprete y su GIL). Así sí
+        hay paralelismo real. Es el análogo de OpenMP en Python.
+\end{itemize}
+
+\textbf{En el proyecto:} el MODELO conceptual es OpenMP (memoria compartida,
+fork-join), pero la IMPLEMENTACIÓN es \texttt{multiprocessing} porque el GIL
+impide hilos reales. Conceptualmente es lo mismo: $p$ trabajadores que comparten
+memoria y se sincronizan al final.
+
+\section{Fork-join}
+
+Es el patrón de ejecución:
+\begin{enumerate}
+  \item Un proceso ``raíz'' está corriendo.
+  \item \textbf{Fork}: el raíz crea $p$ procesos trabajadores (heredan la
+        memoria por \emph{copy-on-write}, sin copiar).
+  \item Los $p$ trabajadores hacen su parte \textbf{en paralelo}.
+  \item \textbf{Join}: el raíz espera a que todos terminen y recoge los
+        resultados.
+\end{enumerate}
+Es exactamente lo que hace \texttt{\#pragma omp parallel} en OpenMP y
+\texttt{multiprocessing.Pool} en Python.
+
+\section{fork vs spawn (detalle del código)}
+
+\begin{itemize}
+  \item \term{fork}: el proceso hijo es un \textbf{clon} del padre (hereda la
+        memoria por copy-on-write, sin copiar datos). \textbf{Eficiente}. Es lo
+        fiel al modelo de memoria compartida. Lo usamos en la beta 3.
+  \item \term{spawn}: el proceso hijo arranca \textbf{desde cero} y hay que
+        \textbf{serializar} (con \emph{pickle}) y enviarle los datos. Más lento.
+        La beta 2 lo usaba (y por eso era ineficiente).
+\end{itemize}
+
+% ====================================================================
+\part*{PARTE VI --- Las métricas, paso a paso (con números reales)}
+\addcontentsline{toc}{section}{PARTE VI --- Las métricas, paso a paso}
+
+Aquí derivamos cada métrica del pseudocódigo, con un ejemplo numérico real.
+
+\section{Setup numérico}
+
+Plataforma: \textbf{cluster Khipu, nodo n003} (Intel Xeon Gold 6130, 32 núcleos).
+Tomemos $n=40000$ muestras. Parámetros: $p_s=32$ semillas, $E=100$ épocas,
+$d=32$ features, $h=128$ neuronas, $c=10$ clases.
+
+\section{Work $W$ (trabajo total)}
+
+El paso dominante es entrenar los 32 MLP. Cada MLP cuesta $O(E\cdot n\cdot
+d\cdot h)$:
+\[
+W = O(p_s \cdot E \cdot n \cdot d \cdot h) = O(32\cdot 100\cdot 40000\cdot 32\cdot 128).
+\]
+Esto \textbf{coincide con $T_s$}, el tiempo secuencial. Medido en Khipu:
+$T_s=307$\,s.
+
+\section{Span $T_\infty$}
+
+Con procesadores infinitos, cada semilla tiene su propio procesador ($p=p_s=32$),
+así que cada uno entrena un solo MLP:
+\[
+T_\infty = O(E\cdot n\cdot d\cdot h) + O(\log p_s) = O(E\cdot n\cdot d\cdot h).
+\]
+Es el tiempo de \textbf{un} MLP más la reducción. Irreducible.
+
+\section{Tiempo paralelo $T_p$}
+
+Por el Teorema de Brent, $T_p \le W/p + T_\infty$. Como $E,d,h$ son constantes
+en nuestros experimentos, se absorben en una constante $a$ [s/muestra]. El modelo
+numérico que ajustamos a los datos es:
+\[
+\boxed{T_p \approx a\cdot\frac{p_s}{p}\cdot n + b\cdot\log_2 p}
+\]
+\textbf{Ejemplo} ($n=40000$, $p=2$):
+\[
+T_2 \approx 2.42\!\times\!10^{-4}\cdot\frac{32}{2}\cdot 40000 + 2.18\cdot\log_2 2
+= 154.9 + 2.18 = 157\text{ s}.
+\]
+El medido fue $153.6$\,s. ¡Coincide! (la pequeñísima diferencia es ruido).
+
+\section{Costo $C_p$ y WT-optimalidad}
+
+$C_p = T_p\cdot p$. Como $p\le p_s=32=W/T_\infty$, el algoritmo es WT-óptimo:
+$C_p=O(W)$.
+
+\section{Speedup y eficiencia (ejemplo real, Khipu)}
+
+Para $n=40000$ en Khipu (32 núcleos):
+\begin{center}
+\begin{tabular}{rrrrr}
+\toprule
+$p$ & $T_p$ (s) & Speedup $S$ & Eficiencia $E$ & GFLOP/s \\\midrule
+1 & 305.3 & 1.00 & 1.00 & 7.2 \\
+2 & 153.6 & 1.99 & 0.99 & 14.3 \\
+4 & 108.9 & 2.80 & 0.70 & 20.3 \\
+8 & 53.2 & 5.73 & 0.72 & 41.4 \\
+16 & 33.0 & 9.26 & 0.58 & 66.8 \\
+32 & 28.9 & 10.58 & 0.33 & 76.3 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{Qué leer aquí:}
+\begin{itemize}
+  \item $p=2$ es casi ideal (eficiencia 0.99).
+  \item El speedup sigue creciendo hasta $p=32$, donde alcanza $\sim 10.6$.
+  \item La eficiencia cae a $p$ alto (a $p=32$, 0.33) por la contención de
+        memoria y el hyper-threading (32 lógicos $\approx$ 16 físicos).
+  \item El GFLOP/s sube hasta $\sim 76$.
+\end{itemize}
+
+\section{Cálculo de FLOPs}
+
+Para UN MLP (forward + backward, $E$ épocas, $n$ muestras, arquitectura $d$-$h$-$c$):
+\[
+\text{FLOPs por MLP} = 4\cdot E\cdot h\cdot(d+c)\cdot n.
+\]
+\textbf{Ejemplo} ($n=40000$):
+$4\cdot 100\cdot 128\cdot(32+10)\cdot 40000 = 8.6\!\times\!10^{10}$ FLOPs $=86$\,GFLOPs por MLP.
+Los 32 MLP suman $\approx 2.75\!\times\!10^{12}$ FLOPs. A $T_8=53.2$\,s (Khipu),
+$\text{GFLOP/s}=2.75\!\times\!10^{12}/(53.2\cdot 10^9)\approx 52$. $\checkmark$
+(En $p=32$, $T=28.9$\,s $\Rightarrow \approx 76$\,GFLOP/s, el pico.)
+
+% ====================================================================
+\part*{PARTE VII --- La implementación}
+\addcontentsline{toc}{section}{PARTE VII --- La implementación}
+
+\section{Las 3 versiones beta}
+
+El enunciado pide registrar el desarrollo en $\geq 3$ pasos. Nuestras 3 betas:
+
+\begin{enumerate}
+  \item \textbf{Beta 1 (\texttt{beta1\_secuencial.py}):} el Algoritmo 1 puro,
+        secuencial. Es la \textbf{referencia} (da $T_s$ y verifica correctitud).
+  \item \textbf{Beta 2 (\texttt{beta2\_paralelo.py}):} primer intento paralelo
+        con \texttt{spawn}. Funciona pero es \textbf{ineficiente} porque
+        serializa los datos a cada worker.
+  \item \textbf{Beta 3 (\texttt{beta3\_paralelo\_opt.py}):} la versión final,
+        con \textbf{fork} (los workers heredan los datos por copy-on-write, sin
+        copiar), reparto balanceado de semillas y medición fina de tiempos.
+        \textbf{Esta es la que usamos para experimentar.}
+\end{enumerate}
+
+\section{Worker crítico (cómo se mide el tiempo paralelo)}
+
+\begin{importante}[title=\textbf{El tiempo paralelo NO es la suma}]
+En paralelo, los $p$ trabajadores corren \textbf{a la vez}. El tiempo total de
+esa fase es el del \textbf{trabajador más lento} (el último en terminar), NO la
+suma de todos. Si sumaras los tiempos estarías midiendo el \emph{trabajo} $W$, no
+el \emph{tiempo} $T_p$.
+
+Por eso medimos \texttt{T\_compute = max(tiempos de los workers)}.
+\end{importante}
+
+\section{Cómo se descompone el tiempo}
+
+\begin{itemize}
+  \item \texttt{T\_compute}: tiempo del worker crítico (la región paralela).
+  \item \texttt{T\_reduce}: overhead de recoger resultados + arg-máx
+        (\textbf{medido $<1.5\%$}).
+  \item \texttt{T\_total = T\_compute + T\_reduce}.
+  \item \textbf{NO medimos} la lectura de datos ni el split (corrección del profe).
+\end{itemize}
+
+\section{Reparto balanceado de semillas}
+
+Repartimos las 32 semillas en $p$ grupos de tamaño $\lceil 32/p\rceil$ o
+$\lfloor 32/p\rfloor$, para que funcione \textbf{aunque $p$ no divida a 32}. En
+la práctica usamos $p\in\{1,2,4,8,16,32\}$ que sí dividen a 32, pero el código es
+robusto.
+
+% ====================================================================
+\part*{PARTE VIII --- Los resultados, interpretados}
+\addcontentsline{toc}{section}{PARTE VIII --- Los resultados, interpretados}
+
+\section{El hallazgo más importante: dos plataformas}
+
+\begin{importante}[title=\textbf{Mismo algoritmo, dos hardwares: el speedup escala}]
+Corrimos el mismo código en dos plataformas de memoria compartida:
+\textbf{MacBook M5 (10 núcleos)} y \textbf{cluster Khipu, nodo n003 (32 núcleos,
+Xeon Gold 6130)}. Resultado: el speedup pasa de \textbf{$\sim$5 (Mac)} a
+\textbf{$\sim$10.6 (Khipu)} al aumentar los núcleos. Eso \textbf{valida
+experimentalmente} que el algoritmo escala con el hardware, como predice la
+teoría. Y en ambas plataformas el speedup no llega a $p$ (los núcleos totales):
+investiguemos por qué.
+\end{importante}
+
+\section{¿Por qué el speedup no llega a los núcleos totales?}
+
+Descartamos causas con el método científico:
+
+\textbf{Hipótesis 1: ¿es el overhead de gestión de procesos (fork)?}
+Medimos \texttt{T\_reduce}: es $<1.5\%$. \textbf{Descartado.}
+
+\textbf{Hipótesis 2: ¿es que sklearn paraleliza cada MLP con BLAS y se estorban?}
+Medimos un MLP aislado con y sin limitar hilos: idéntico
+(\texttt{threadpoolctl} no detecta hilos). Limitamos el BLAS a 1 hilo por proceso
+para que la única paralelización sea la nuestra. \textbf{Descartado.}
+
+\textbf{Hipótesis 3 (correcta): contención de memoria + hyper-threading.}
+El entrenamiento del MLP es \emph{memory-bound} (accede a $n\cdot d$ datos por
+época). A alto $p$, los procesos compiten por el ancho de banda de memoria y cada
+MLP se vuelve más lento. Además, en el Xeon los ``32 núcleos'' son en realidad
+\textbf{16 físicos con hyper-threading} (32 lógicos), así que el speedup real
+máximo está entre 10 y 16. La Mac, sin hyper-threading, satura antes ($\sim$5 con
+sus 10 núcleos).
+
+\begin{caja}[title=\textbf{La lección clave}]
+El speedup crece con el hardware (Mac $\sim$5 $\to$ Khipu $\sim$10.6), pero
+nunca llega a $p$ porque (1) el hyper-threading infla el conteo de núcleos y (2)
+la memoria compartida se satura. Un análisis honesto que mide, descarta
+hipótesis y concluye con causas verificadas vale más que un speedup ``perfecto''.
+\end{caja}
+
+\section{Validación con la teoría (el ajuste, Khipu)}
+
+Ajustamos el modelo $T_p = a\cdot(p_s/p)\cdot n + b\cdot\log_2 p$ por mínimos
+cuadrados no-negativos sobre los 48 puntos de Khipu:
+\[
+a=2.42\!\times\!10^{-4}\text{ s/muestra},\quad b=2.18\text{ s},\quad R^2=0.989.
+\]
+\textbf{$R^2=0.989$ significa que el modelo explica el 98.9\,\% de la variación
+de los datos.} Un ajuste excelente. La teoría (con el término $\log_2 p$ de la
+reducción, que corregimos respecto al parcial) reproduce los datos. (En la Mac el
+ajuste dio $R^2=0.982$; ambos excelentes.)
+
+\textbf{Detalle de rigor:} el modelo ajusta bien en la región lineal ($p\le 4$);
+para $p>8$ el experimental queda por encima de la teoría \emph{justo por la
+contención de memoria} que no captura la fórmula lineal.
+
+\section{¿$E$ se mantiene constante? (pregunta del enunciado)}
+
+\textbf{Respuesta matizada:}
+\begin{itemize}
+  \item \textbf{Strong scaling} (Amdahl): $E$ \textbf{NO} se mantiene; cae con
+        $p$ (por overhead + contención).
+  \item \textbf{Weak scaling} (Gustafson): $E$ \textbf{SÍ} se mantiene cercana a
+        1 (al crecer $n$ con $p$, la carga por procesador es constante).
+\end{itemize}
+Lo mostramos en dos gráficas separadas.
+
+% ====================================================================
+\part*{PARTE IX --- La exposición oral}
+\addcontentsline{toc}{section}{PARTE IX --- La exposición oral}
+
+\section{Estructura recomendada (10 minutos)}
+
+\begin{enumerate}
+  \item \textbf{(1 min) Problema:} entrenar 32 MLP con semillas distintas,
+        quedarse con el mejor. Es embarazosamente paralelo.
+  \item \textbf{(2 min) PRAM CREW:} muestra el Algoritmo 2. Señala \texttt{pardo},
+        la \textbf{lectura concurrente} (no ``broadcast''), la reducción arg-máx.
+        \textbf{Justifica la memoria compartida}.
+  \item \textbf{(2 min) Métricas:} $W$, $T_\infty$, $T_p$ (con el $\log_2 p$),
+        speedup, eficiencia, FLOPs. Señala la fórmula con el término de
+        reducción.
+  \item \textbf{(3 min) Resultados:} dos plataformas (Mac $\sim$5, \textbf{Khipu
+        $\sim$10.6}), la comparación valida la escalabilidad. Eficiencia
+        (responde ``¿$E$ constante?'' $\to$ strong cae, weak se mantiene),
+        validación teórica ($R^2=0.989$), GFLOP/s.
+  \item \textbf{(1 min) Mejoras propuestas.}
+  \item \textbf{(1 min) Conclusiones.}
+\end{enumerate}
+
+\section{Preguntas que hará el profe (con respuestas)}
+
+\textbf{P: ¿Por qué el speedup no llega a los núcleos totales?}\\
+R: Dos causas: (1) \textbf{hyper-threading} --- en el Xeon, 32 núcleos lógicos
+$\approx$ 16 físicos, así que el speedup real máximo está entre 10 y 16 (medimos
+$\sim$10.6); (2) \textbf{contención de memoria} --- el MLP es memory-bound y a
+alto $p$ los procesos compiten. La reducción arg-máx es $<1.5\%$, así que NO es
+la comunicación. La prueba: en la Mac (10 núcleos, sin HT) satura en $\sim$5, y
+en Khipu (32) llega a $\sim$10.6 --- el speedup crece con el hardware.
+
+\textbf{P: ¿Por qué corrieron en dos máquinas?}\\
+R: Para validar la escalabilidad en hardware distinto. Mismo código, mismo
+dataset, dos plataformas de memoria compartida. Mostrar que el speedup se duplica
+al pasar de 10 a 32 núcleos valida experimentalmente que el algoritmo escala.
+
+\textbf{P: ¿Por qué no usaron MPI?}\\
+R: El problema es embarazosamente paralelo y los datos son compartidos de solo
+lectura. En MPI habría que copiar el dataset a cada proceso (memoria $\times p$).
+En memoria compartida cada proceso hereda los datos por fork sin copiar. MPI no
+aportaría nada y sumaría overhead.
+
+\textbf{P: ¿Es realmente OpenMP si usan Python?}\\
+R: El MODELO es OpenMP (memoria compartida, fork-join). La IMPLEMENTACIÓN es
+\texttt{multiprocessing} porque el GIL impide hilos reales. Conceptualmente es
+lo mismo.
+
+\textbf{P: ¿Cómo verificaron que el paralelo da lo mismo que el secuencial?}\\
+R: El código es determinista (semillas fijas). Comparamos las 32 accuracies y el
+modelo ganador entre sec y par: \textbf{idénticos}.
+
+\textbf{P: ¿Qué es el ``worker crítico'' que miden?}\\
+R: El tiempo de la región paralela = el worker más lento. Medir la suma sería
+medir el trabajo $W$, no el tiempo $T_p$.
+
+\textbf{P: ¿Por qué no midieron la lectura de datos?}\\
+R: Por la observación del profesor: no incluir I/O en la medición de tiempos.
+Medimos solo la región paralelizable + la reducción.
+
+\textbf{P: ¿De dónde sale el $\log_2 p$ en $T_p$?}\\
+R: De la reducción arg-máx en árbol binario: con $p$ resultados locales, hace
+$\log_2 p$ rondas para encontrar el máximo global.
+
+\textbf{P: ¿El algoritmo es escalable?}\\
+R: Sí. Strong scaling: lineal hasta $p=4$. Weak scaling: $E\approx 1$. El límite
+es el ancho de banda de memoria, no el algoritmo.
+
+\textbf{P: ¿El algoritmo es WT-óptimo?}\\
+R: Sí. $C_p=T_p\cdot p = O(W)$ porque $p\le p_s = W/T_\infty$.
+
+\textbf{P: ¿Cómo calcularon los FLOPs?}\\
+R: A partir de la arquitectura: $4\cdot E\cdot h\cdot(d+c)\cdot n$ por MLP. No
+usamos hw-counters; contamos las operaciones del costo conocido del MLP.
+GFLOP/s $=$ FLOPs totales$/T_p$.
+
+\section{Trampas que caza el profe}
+
+\begin{itemize}
+  \item Decir \textbf{``broadcast''} en memoria compartida $\to$ di
+        \textbf{``lectura concurrente CREW''}.
+  \item Confundir tiempo paralelo con \textbf{suma} de tiempos $\to$ es el
+        \textbf{máximo} (worker crítico).
+  \item Decir que $E(p)$ siempre es 1 $\to$ cae con $p$ (solo se mantiene en
+        weak scaling).
+  \item Decir ``usamos OpenMP'' sin aclarar $\to$ ``modelo OpenMP, implementado
+        con multiprocessing por el GIL''.
+\end{itemize}
+
+% ====================================================================
+\part*{PARTE X --- Chuleta final}
+\addcontentsline{toc}{section}{PARTE X --- Chuleta final}
+
+\section{Diccionario rápido}
+
+\begin{tabular}{ll}
+\toprule
+Término & Significado \\\midrule
+$T_s$ & tiempo secuencial (con 1 procesador) \\
+$T_p$ & tiempo paralelo (con $p$ procesadores) \\
+$S(p)=T_s/T_p$ & speedup (cuántas veces más rápido) \\
+$E(p)=S(p)/p$ & eficiencia (aprovechamiento, $\le 1$) \\
+$W$ & work = trabajo total = $O(T_s)$ \\
+$T_\infty$ & span = camino crítico (tiempo con $\infty$ procesadores) \\
+$C_p=T_p\cdot p$ & costo \\
+PRAM & modelo teórico de máquina paralela \\
+CREW & lectura Concurrente, Escritura Exclusiva \\
+\texttt{pardo} & bucle en paralelo \\
+Brent & $T_p\le W/p + T_\infty$ \\
+Amdahl & techo de speedup por fracción secuencial \\
+Gustafson & speedup casi lineal (weak scaling) \\
+GIL & candado de Python que impide hilos paralelos \\
+fork & crear proceso hijo que hereda memoria \\
+MLP & perceptrón multicapa (red neuronal) \\
+$\eta$ & learning rate \\
+$E$ & épocas \\
+accuracy & fracción de aciertos \\
+$p_s$ & número de semillas (32) \\
+\bottomrule
+\end{tabular}
+
+\section{Las fórmulas que debes saber}
+
+\[
+S(p)=\frac{T_s}{T_p}\qquad E(p)=\frac{S(p)}{p}\qquad
+T_p\le\frac{W}{p}+T_\infty\qquad T_p\approx a\frac{p_s}{p}n+b\log_2 p
+\]
+
+\[
+\text{FLOPs por MLP}=4Eh(d+c)n\qquad
+\text{GFLOP/s}=\frac{\text{FLOPs totales}}{T_p\cdot 10^9}
+\]
+
+\section{Los números del proyecto (memorízalos)}
+
+\begin{itemize}
+  \item $p_s=32$ semillas, $d=32$, $h=128$, $c=10$, $E=100$ épocas.
+  \item Dos plataformas: MacBook M5 (10 núcleos) y \textbf{cluster Khipu n003}
+        (Xeon Gold 6130, 32 núcleos lógicos $\approx$ 16 físicos con HT).
+  \item Speedup techo: \textbf{$\sim$5 (Mac), $\sim$10.6 (Khipu)} --- crece con
+        el hardware.
+  \item Reducción arg-máx $<1.5\%$ del tiempo (embarassingly parallel).
+  \item Ajuste teórico (Khipu): $a=2.42\!\times\!10^{-4}$\,s/muestra,
+        $b=2.18$\,s, $R^2=0.989$.
+  \item GFLOP/s pico: $\sim$53 (Mac), \textbf{$\sim$76 (Khipu)}.
+  \item Por qué no llega a $p$: hyper-threading (32 lógicos $\neq$ 32 físicos) +
+        contención de memoria (MLP memory-bound).
+\end{itemize}
+
+\begin{caja}[title=\textbf{Regla de oro}]
+Si el profe pregunta algo que no medimos, di ``no lo medimos, pero\ldots'' y da
+la respuesta cualitativa correcta. \textbf{Nunca inventes números.}
+\end{caja}
+
+\end{document}
