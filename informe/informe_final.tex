@@ -159,8 +159,8 @@ docente, no se contabiliza como un paso paralelo independiente.
   \State entrenar las MLP de $S_k$; guardar mejor $(A^{(k)}_{\text{best}}, M^{(k)})$ local
 \EndFor
 \Statex \textcolor{black!55}{/* Pasos 3\,..\,$2{+}\log_2 p$ -- Reducción arg\-máx en árbol */}
-\For{$\text{stride}=1$ \textbf{to} $\log_2 p$}
-  \ForAll{$k=0,2\cdot\text{stride},\dots$ \textbf{pardo}}
+\For{$\text{stride}=1,2,4,\dots,p/2$} \Comment{$\text{stride}\gets 2\cdot\text{stride}$ cada ronda}
+  \ForAll{$k=0,\,2\cdot\text{stride},\,4\cdot\text{stride},\dots$ \textbf{pardo}}
     \If{$A^{(k+\text{stride})}_{\text{best}}>A^{(k)}_{\text{best}}$}
        $A^{(k)}_{\text{best}}\gets A^{(k+\text{stride})}_{\text{best}}$;\; $M^{(k)}\gets M^{(k+\text{stride})}$
     \EndIf
@@ -169,6 +169,14 @@ docente, no se contabiliza como un paso paralelo independiente.
 \State \Return $M^\ast=M^{(0)}$
 \end{algorithmic}
 \end{algorithm}
+
+\textbf{Nota de implementación.} La reducción \emph{arg\-máx} en árbol de
+$\log_2 p$ rondas es el \emph{modelo} PRAM que justifica el término $\log_2 p$
+del costo (Sección~\ref{sec:metricas}); en la implementación, la reducción se
+realiza con un \texttt{max} serial sobre los $p_s$ resultados durante la fase
+\emph{join} del esquema \emph{fork--join}. Ambas variantes producen el mismo
+$M^\ast$ y su diferencia es despreciable en la práctica, pues la reducción mide
+$\le 3.6\%$ del tiempo total (Sección~\ref{sec:resultados}).
 
 \subsection{Justificación del uso de memoria compartida}
 \label{sec:just}
@@ -222,8 +230,11 @@ Teorema de Brent se obtiene el modelo de costo
 \boxed{\,T_p \;\approx\; a\,\frac{p_s}{p}\,E\,n\,d\,h \;+\; b\,\log_2 p\,,}
 \end{equation}
 donde $a$ es una \textbf{constante empírica} que traduce la complejidad
-estructural $E\,n\,d\,h$ a segundos (refleja la velocidad de la máquina) y $b$ la
-latencia asociada a cada ronda de la reducción \emph{arg\-máx}. Ambas se estiman
+estructural $E\,n\,d\,h$ a segundos (refleja la velocidad de la máquina) y $b$ un
+\textbf{overhead empírico por ronda} que agrupa la sincronización \emph{fork--join}
+y la contención de memoria; conviene subrayar que $b$ \emph{no} es la latencia de
+la reducción \emph{arg\-máx} propiamente dicha, cuyo peso medido es $\le 3.6\%$ de
+$T_{\text{total}}$ (Sección~\ref{sec:resultados}). Ambas se estiman
 por mínimos cuadrados en la Sección~\ref{sec:teorica}. Conviene recalcar que
 $a$ y $E\,d\,h$ son factores de naturaleza distinta: $E\,d\,h$ es la complejidad
 del MLP (fija), mientras que $a$ depende del hardware.
@@ -261,12 +272,12 @@ el mismo modelo ganador que la secuencial.
 \begin{figure}[H]\centering
 \includegraphics[width=0.72\textwidth]{../figures/fig_khipu_tiempos.png}
 \caption{Tiempo vs $p$ (Khipu, 32 núcleos). La reducción $T_{\text{reduce}}$ es
-$<1.5\%$: el cuello no es la comunicación.}
+$\le 3.6\%$ (y $<1\%$ para $n$ grande): el cuello no es la comunicación.}
 \end{figure}
 
 El tiempo cae con $p$ sin saturarse prematuramente. La reducción
-$T_{\text{reduce}}$ es $<1.5\%$ de $T_{\text{total}}$, confirmando el carácter
-embarazosamente paralelo.
+$T_{\text{reduce}}$ es $\le 3.6\%$ de $T_{\text{total}}$ (y $<1\%$ para $n$
+grande), confirmando el carácter embarazosamente paralelo.
 
 \subsection{Speedup}
 \begin{figure}[H]\centering
@@ -276,12 +287,16 @@ embarazosamente paralelo.
 
 El modelo de costo de la Sección~\ref{sec:metricas} anticipa un speedup cercano
 a $p$ mientras el cómputo domine sobre la reducción. La Figura confirma esa
-predicción en la región baja: $S(p)$ sigue la diagonal ideal hasta $p\approx 8$
-(eficiencia $E>0.7$), lo que valida tanto el reparto de semillas como la
-hipótesis de trabajo dominante. Más allá de ese punto el crecimiento se atenúa y
+predicción en la región baja: $S(p)$ sigue la diagonal ideal hasta $p\approx 2$
+($E\approx0.99$) y conserva una eficiencia razonable ($E\approx0.6$--$0.9$ según
+$n$) hasta $p\approx 8$, lo que valida tanto el reparto de semillas como la
+hipótesis de trabajo dominante. Se observa una anomalía puntual en $p=4$ ---con
+eficiencia incluso inferior a la de $p=8$ para los $n$ pequeños y varianza alta
+entre repeticiones---, atribuible a efectos de turbo-boost/NUMA con pocos
+procesos activos. Más allá de $p\approx 8$ el crecimiento se atenúa y
 se estabiliza en torno a $S\approx 10.6$ para $p=32$. Este techo, muy por debajo
 de los 32 núcleos lógicos del nodo, no obedece a la comunicación
-($T_{\text{reduce}}<1.5\%$) sino a dos factores del hardware: el
+($T_{\text{reduce}}\le 3.6\%$) sino a dos factores del hardware: el
 \textbf{hyper-threading} presenta 32 núcleos lógicos que en realidad son
 $\approx 16$ físicos, acotando el speedup real al intervalo $[10,16]$; y la
 \textbf{contención del ancho de banda de memoria}, propia de una carga
@@ -297,8 +312,9 @@ aprovechamiento real.
 \end{figure}
 
 La eficiencia es la contraparte informativa del speedup: mide cuánto aporta cada
-procesador adicional. Bajo \emph{strong scaling} decrece de forma sostenida con
-$p$, pasando de $\sim$0.99 en $p=2$ a $\sim$0.33 en $p=32$, reflejando los mismos
+procesador adicional. Bajo \emph{strong scaling} decrece con $p$ ---de forma no
+estrictamente monótona, por el bache en $p=4$ ya señalado---, pasando de
+$\sim$0.99 en $p=2$ a $\sim$0.33 en $p=32$, reflejando los mismos
 límites identificados arriba (hyper-threading y contención). Esta degradación es
 mucho más modesta bajo \emph{weak scaling} (Sección~\ref{sec:weak}), donde la
 carga por procesador se conserva: aunque tampoco es perfecta ---la naturaleza
@@ -321,9 +337,10 @@ Ec.~(\ref{eq:tp}) por mínimos cuadrados no-negativos sobre los 48 puntos
 experimentales. El ajuste arroja $R^2=\textbf{0.989}$, con
 $a\approx\textbf{$5.9\times 10^{-10}$}$\,s y $b=\textbf{2.18}$\,s. Como muestra
 la Figura, el término dominante $a\,(p_s/p)\,E\,n\,d\,h$ reproduce fielmente la
-región lineal, mientras que la leve desviación a alto $p$ corresponde a la
-contención de memoria que el modelo lineal no captura (y no a la reducción, cuyo
-peso medido es $<1.5\%$). El elevado $R^2$ permite concluir que la expresión
+región lineal, mientras que el término $b\,\log_2 p$ (con $b\approx2.18$\,s) no
+representa la reducción \emph{arg\-máx} ---cuyo peso medido es $\le 3.6\%$ de
+$T_{\text{total}}$--- sino que absorbe empíricamente el overhead de sincronización
+y la contención de memoria a alto $p$ que el término lineal no captura. El elevado $R^2$ permite concluir que la expresión
 teórica ---que, a diferencia del parcial, \textbf{incluye el término $\log_2 p$}
 de la reducción--- constituye una descripción correcta del costo del algoritmo.
 
@@ -334,8 +351,8 @@ de la reducción--- constituye una descripción correcta del costo del algoritmo
 \end{figure}
 
 El rendimiento complementa la lectura del speedup desde la óptica de las
-operaciones: crece de forma sostenida hasta estabilizarse en torno a
-\textbf{$\sim$76 GFLOP/s} para $p\ge 16$. Que la curva se sature al mismo nivel
+operaciones: crece de forma sostenida hasta $\sim$67 GFLOP/s en $p=16$ y
+\textbf{$\sim$76 GFLOP/s} en $p=32$. Que la curva se sature al mismo nivel
 que el speedup, y no siga escalando con $p$, confirma que el cuello final no son
 los núcleos sino el ancho de banda de memoria compartido. Los dos análisis
 siguientes caracterizan ambos regímenes de escalabilidad para cerrar esta
