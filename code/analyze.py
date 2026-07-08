@@ -76,15 +76,11 @@ fig, ax = plt.subplots(figsize=(7, 4.5))
 for i, n in enumerate(N_LIST):
     sub = agg[agg.n == n].sort_values("p")
     ax.plot(sub.p, sub.T_total, "o-", color=colors[i], label=f"n={n}")
-    ax.plot(sub.p, sub.T_compute, "x--", color=colors[i], alpha=0.6)
-ax.plot([], [], "k-", label="$T_{total}$")
-ax.plot([], [], "kx--", label="$T_{compute}$ (worker crítico)")
+ax.axvline(CORES, color="red", ls=":", alpha=0.7, label=f"núcleos={CORES}")
 ax.set_xscale("log", base=2); ax.set_xticks(P_LIST); ax.set_xticklabels(P_LIST)
-ax.axvline(CORES, color="red", ls=":", alpha=0.7,
-           label=f"núcleos físicos={CORES}")
 ax.set_xlabel("Número de procesos p"); ax.set_ylabel("Tiempo (s)")
 ax.set_title("Tiempo de ejecución vs p")
-ax.legend(fontsize=8, ncol=2)
+ax.legend(fontsize=9)
 fig.tight_layout(); fig.savefig(os.path.join(FIG, FIG_PREFIX + "tiempos.png")); plt.close()
 
 # ----------------------------------------------------------------------
